@@ -122,6 +122,14 @@ to
 
     text-before \\=\\[1 + 1\\] text-after.
 
+A value of `'external' means that, when transforming from inline
+to display math, line breaks are inserted before and after the
+delimiters, but not inside the delimiters, as in
+
+    text-before
+    \\=\\[1 + 1\\]
+    text-after
+
 A value of `nil', however, would switch between the above inline
 math version and
 
@@ -130,6 +138,19 @@ math version and
       1 + 1
     \\]
     text-after."
+  :group 'math-delimiters
+  :type 'boolean)
+
+(defcustom math-delimiters-padding nil
+  "Whether inline and display math delimiters should include
+interior padding. A value of `t' means that new math delimiters
+will include a space inside as in will be in
+
+    \\( math \\) or \\=\\[ math \\]
+
+while a value of `nil' means that there will be no padding, as in
+
+    \\(math\\) or \\=\\[math\\]"
   :group 'math-delimiters
   :type 'boolean)
 
@@ -155,27 +176,28 @@ barf."
              (goto-char orig-pos))))))
 
 (defun math-delimiters--toggle-line-breaks (open close)
-  (let* ((to-display (equal (car math-delimiters-display) open)))
+  (let ((to-display (equal (car math-delimiters-display) open))
+	(only-external (equal math-delimiters-compressed-display-math
+			      'external)))
     (cl-flet ((toggle-close ()
                 (if to-display
                     (progn
-                      (newline-and-indent)
+                      (unless (looking-at "[[:space:]]*$") (newline-and-indent))
                       (search-backward close)
-                      (newline-and-indent))
+                      (unless only-external (newline-and-indent)))
                   (join-line -1)
-                  (join-line -1)
-                  (backward-char (1+ (length close)))))
+		  (if (not only-external)
+		      (join-line)
+		    (backward-char (1+ (length close))))))
               (toggle-open ()
                 (if to-display
                     (progn (newline-and-indent)
                            (forward-char (length open))
-                           (newline-and-indent))
+                           (unless only-external (newline-and-indent)))
                   (join-line)
-                  (join-line -1)
-                  ;; If necessary, like when the inline delimiters are
-                  ;; Dollars, fix `join-line's whitespace insertion.
-                  (when (equal (char-after) ?\s)
-                    (delete-char 1)))))
+                  (unless only-external
+		    (join-line -1)
+		    (when math-delimiters-padding (insert " "))))))
       (toggle-close)
       (search-backward open)
       (toggle-open)
@@ -216,9 +238,10 @@ delimiters."
              (beginning-of-line)
              (looking-at "^\\s-*#\\+TBLFM: ")))
       (insert "$")
-    (let ((open (car math-delimiters-inline))
+    (let ((pad (if math-delimiters-padding " " ""))
+	  (open (car math-delimiters-inline))
           (close (cdr math-delimiters-inline))
-          (display-open (car math-delimiters-display))
+          (display-open (car math-delimiters-display) )
           (display-close (cdr math-delimiters-display)))
       (cl-flet* ((after-p (close)
                    (looking-back (regexp-quote close)
@@ -226,15 +249,21 @@ delimiters."
                  (flip-after (from-open from-close to-open to-close)
                    (delete-char (- (length from-close)))
                    (math-delimiters--slurp-or-barf-characters from-close)
+		   (unless (looking-back "[[:blank:]]" 1) (insert pad))
                    (insert to-close)
-                   (let ((end (point)))
-                     (backward-char (length to-close))
+                   (let ((end (point))
+			 (extra 0))
+                     (backward-char (+ (length to-close) (length pad)))
                      (search-backward from-open)
                      (delete-char (length from-open))
                      (insert to-open)
+		     (unless (looking-at "[[:blank:]]")
+		       (insert pad)
+		       (setq extra (length pad)))
                      (goto-char (+ end (- (length to-open)
-                                          (length from-open)))))
-                   (unless math-delimiters-compressed-display-math
+                                          (length from-open))
+				   extra)))
+                   (unless (eq math-delimiters-compressed-display-math t)
                      (math-delimiters--toggle-line-breaks to-open to-close)))
                  (middle-p (open close)
                    (and (save-excursion
@@ -247,29 +276,29 @@ delimiters."
                  (flip-middle (from-open from-close to-open to-close)
                    (search-forward from-close)
                    (flip-after from-open from-close to-open to-close)
-                   (backward-char (length to-close))
+                   (backward-char (+ (length to-close) (length pad)))
                    (unless (or math-delimiters-compressed-display-math
                                (equal to-close close))
                      (beginning-of-line)
                      (backward-char 1))))
         (cond
-          ((use-region-p)
-           (let ((end (region-end)))
-             (goto-char (region-beginning))
-             (insert open)
-             (goto-char (+ end (length open)))
-             (insert close)))
-          ((middle-p display-open display-close)
-           (flip-middle display-open display-close open close))
-          ((after-p display-close)
-           (flip-after display-open display-close open close))
-          ((middle-p open close)
-           (flip-middle open close display-open display-close))
-          ((after-p close)
-           (flip-after open close display-open display-close))
-          (t
-           (insert open close)
-           (backward-char (length close))))))))
+         ((use-region-p)
+          (let ((end (region-end)))
+            (goto-char (region-beginning))
+            (insert open)
+            (goto-char (+ end (length open)))
+            (insert close)))
+         ((middle-p display-open display-close)
+          (flip-middle display-open display-close open close))
+         ((after-p display-close)
+          (flip-after display-open display-close open close))
+         ((middle-p open close)
+          (flip-middle open close display-open display-close))
+         ((after-p close)
+          (flip-after open close display-open display-close))
+         (t
+          (insert open pad pad close)
+          (backward-char (+ (length close) (length pad)))))))))
 
 (provide 'math-delimiters)
 ;;; math-delimiters.el ends here
